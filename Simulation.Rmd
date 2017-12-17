@@ -1,0 +1,191 @@
+---
+title: "Regressionsanalyse mit Hilfe von Simulationen"
+author: "Fabian Müller"
+date: "17 März 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+```
+
+# Einführung
+Der p-Wert, jeder kennt ihn, alle nutzen ihn, keiner versteht ihn so recht. Klar ist nur, soll eine Hypothese überprüft werden, wird früher oder später der p-Wert als abschließendes Entscheidungsmaß angeführt. Auch wenn die Verwendung von p-Werten zur Evaluation von Hypothesen allgegenwärtig ist, ist deren Verwendung keineswegs unumstritten. Etliche [Studien](http://www.ncbi.nlm.nih.gov/pubmed/3771906) und [Artikel](http://heather.cs.ucdavis.edu/~matloff/132/PLN/ProbStatBook.pdf) haben bereits in der Vergangenheit gezeigt, dass p-Werte kein geeignetes Werkzeug dafür darstellen. 
+
+Nachdem kürzlich auch die ASA nach mehr als 150 Jahren die Verwendung von p-Werten zu Evaluation von (Null-) Hypothesen [offiziell](http://amstat.tandfonline.com/doi/abs/10.1080/00031305.2016.1154108) verworfen hat, stellt sich nun mehr immer häufiger die Frage, welche Alternativen zur Verfügung stehen. Dieser Blogpost soll zeigen wie **Simulation** als Alternative zu p-Werten verwendet werden können. 
+
+# Daten generieren
+
+Vor der Durchführung der eigentlichen Regression werden zunächst die Daten simuliert. Dazu wird die Anzahl der zu simulierenden Observationen `n` festgelegt und dann mit Hilfe von `rnorm()` zufällig fünf Koeffizienten aus einer Standardnormalverteilung gezogen:
+
+$\beta_j \sim N(0, 1), j \in {1:5}$
+
+
+
+```{r}
+n <- 1000
+beta <- rnorm(n = 5, mean = 0, sd = 10)
+beta
+```
+
+Zu beachten ist hierbei, dass `beta[1]` der sogenannte *Intercept* ist, also die spätere mittlere Ausprägung der abhängigen Variablen für den Fall, dass alle kovariaten gleich Null sind.
+Nach der gleichen Logik kann nun `X`, eine Matrix der *Kovariaten*, gebildet werden. Insgesamt werden für vier Kovariate Observationen gezogen. Für den *Intercept* wird zusätzlich ein Vektor mit Einsen an erster Stelle angefügt.
+
+```{r}
+X <- matrix(data = rnorm(n * (length(beta) - 1)), nrow = n, ncol = length(beta) - 1)
+X <- cbind(1, X)
+```
+
+Nachdem die wahren Koeffizenten sowie die Kovariten gebildet wurden, kann der Datengenerierungsprozess simuliert werden. Dies erfolgt durch die Multiplikation der Koeffizienten mit den zu den Observationen dazugehörigen Kovariaten. In `r` wird diese Matrix-Multiplikation (auch genannt Inneres-Produkt) durch die Funktion`%*%` abgebildet. Um die korrekte Dimensionalität zu gewährleisten muss $X$ zudem mit Hilfe von `t()` zu $X^t$ transponiert werden:
+
+$y = \beta * X + \epsilon$
+
+```{r}
+y <- beta %*% t(X) + rnorm(n)
+
+df <- as.data.frame(cbind(X[, -1], t(y)))
+names(df) <- c("x1", "x2", "x3", "x4", "y")
+```
+
+Der abschließend gebildete Datensatz `df` kann im nächsten Schritt für die Schätzung der Koeffizienten genutzt werde.
+
+# OLS Regression
+
+Das lineare Regressionsmodell wird durch die Funktion `lm()` in R anhand der Methode der kleinsten Quadrate (OLS) geschätzt. 
+
+```{r}
+ols <- lm(y ~ x1 + x2 + x3 + x4, df)
+```
+
+Der Vergleich der durch das Modell ermittelten Koeffizenten mit den wahren Koeffizienten aus dem Datengenerierungsprozess verdeutlicht die hohe Güte unseres Modells. Dies ist naheliegend, da der Datengenerierungsprozess nur die Variablen $x_j j \in {1,2,3,4}$. beinhaltet.
+
+```{r}
+beta
+coef(ols)
+```
+
+# Monte Carlo Simulation
+
+Im Rahmen der klassischen Inferenzstatistik stellt sich nun die Frage, ob die Koeffizienten der Variablen $x_j$ einen *signifikanten* Effekt aufweisen. Anstelle des Blicks auf die p-Werte der Koeffizineten, kann diese Fragestellung auch anhand einer Simulation untersucht werden. 
+
+Die Idee der Simulation ist es, den Einfluss von $x_j$ unter Berücksichtigung der Unsicherheit der Schätzung von $\beta_j$ sowie der grundlegenden Unsicherheit zu simulieren.
+
+```{r, warning = FALSE, message = FALSE}
+library(MASS)
+library(reshape2)
+library(ggplot2)
+```
+
+Der Grundgedanken der Simulation ist es, aus einer gegebenen Verteilung wiederholt Stichproben mit zurücklegen zu ziehen, um damit eine Zielverteilung zu generieren. Dazu wird im ersten Schritt die Anzahl der Simulations-Iterationen festlegt.
+
+```{r}
+n_sim <- 1000
+```
+
+Im zweiten Schritt, werden die Schätzungen auf unserem Regressionsobjekt entnommen. Genauer gesagt, wird der Vektor der geschätzen Koeffizienten $\hat\beta_j$ sowie die geschätzte Varianz-Kovarianzmatrix $\hat{V}$ extrahiert. Basierend auf diesen beiden Größen, wird mit Hilfe von `MASS::mvrnorm()` eine Multivariatenormalverteilung aufgestellt:
+
+$S \sim MVN(\mu = \hat\beta_j, sigma = \hat{V})$
+
+Das ziehen von Werten aus dieser Verteilung simuliert die Unsicherheit unserer Schätzung. Der Mittelwert der Verteilung entspricht dementsprechend den Punktschätzungen der Regression, die damit verbundenen Unsicherheit wird durch die geschätzte Varianz-Kovarianz Matrix repräsentiert. 
+
+```{r}
+beta_hat <- coef(ols)
+V_hat <- vcov(ols)
+
+S <- mvrnorm(n_sim, beta_hat, V_hat)
+```
+
+Im nächsten Schritt werden zwei Szenarien definiert. Ein Szenario ist eine (ggf.) hypothetische Aneinanderreihung von Werten für die Kovariaten. Häufig wird als Wert für die Kovariaten den Mittelwert gewählt. Dieses Vorgehen wird auch hier gewählt. Zusätzlich wird eine Kovariate (in diesem Fall $x_1$) varriert. Dieses Vorgheen erlaubt letztendlich festzustellen, wie sich eine Änderung einer Kovariaten - ceteris paribus - auf die abhängige Variable auswirkt. Im Umkehrschluss kann dadurch untersucht werden, welcher Einfluss der geschätzte Koeffizient $\beta_1$ hat. 
+
+```{r}
+scenario_1 <- c(1, mean(df$x1) - sd(df$x1), mean(df$x2), mean(df$x3), mean(df$x4))
+scenario_2 <- c(1, mean(df$x1) + sd(df$x1), mean(df$x2), mean(df$x3), mean(df$x4))
+```
+
+Durch zeilenweise Multiplikation der Matrix $S$ mit den Szenarien 1 und 2, wird im folgenden Schritt der Datengenerierungsprozess anhand der geschätzen Koeffizienten $\hat\beta_j$ simuliert. Das Ergebniss wird als Vektor $\theta_1$ bzw. $\theta_2$ abgespeichert.  
+
+```{r}
+theta_1 <- apply(S, 1, function(x) x %*% as.matrix(scenario_1))
+theta_2 <- apply(S, 1, function(x) x %*% as.matrix(scenario_2))
+```
+
+Bis zu diesem Punkt, wurde lediglich die mit der Schätzung der Koeffizienten verbundenen Unsicherheit berücksichtigt. 
+Um auch die fundamentale Unsicherheit, also die durch die Natur gegebene Unsicherheit, zu berücksichtigen ist ein zusätzlicher Schritt notwendig. 
+
+Um die fundamentale Unsicherheit zu schätzen, wird die Summe der quadrierten Fehler $\epsilon$ durch die Freiheitsgrade der Regression geteilt:
+
+$\sigma_{est} = \frac{\sqrt{\sum{\epsilon^2}}}{n - 5}$
+
+```{r}
+sigma_est <- sqrt(sum(residuals(ols)^2) / (nrow(df) - length(beta_hat)))
+```
+
+Der so generierte Varianzschätzer $\sigma$ wird nun ein letztes Mal für die Ziehnung einer Stichprobe verwendet. 
+Für jedes zuvor simulierte Element $\theta_k \in \Theta_k, k \in {1,2}$ wird eine Normalverteilung mit $\mu = \theta_k$ und $\sigma = \sigma_{est}$ erstellt und ein Wert darauf gezogen. Durch diese Prozedur werden die bislang deterministisch abgeleiteten Werte einer Randomisierung unterzogen. 
+
+```{r}
+y_hat_1 <- apply(as.matrix(theta_1), 1, function(x) rnorm(1, x, sigma_est))
+y_hat_2 <- apply(as.matrix(theta_2), 1, function(x) rnorm(1, x, sigma_est))
+```
+
+Die somit resultierenden Vektoren $\hat{Y_1}$ und $\hat{Y_2}$ enthalten die durch das Modell vorhergesaten Werte für die beiden anfangs definierten Szenarien. Die aus $\hat{Y_1}$ und $\hat{Y_2}$ ableitbaren Verteilungen spiegeln in gleichermaßen die fundamentale wie auch die Unsicherheit durch die Schätzung wieder. 
+
+Die Mittelwerte von $\hat{Y_1}$ und $\hat{Y_2}$ lassen bereits einen ersten Schluss auf den Einfluss von $\beta_1$ zu:
+
+```{r}
+c(mean(y_hat_1), mean(y_hat_2))
+```
+
+Die mittlere Differenz der abhängigen Variable für die beiden definierten Szenarien beträgt somit `r round(diff(c(mean(y_hat_1), mean(y_hat_2))), 2)`. Um die Unterschiede zwischen den Verteilungen noch deutlich quantifizieren zu können, reicht ein Blick auf die Quantile der beiden Verteilungen:
+
+```{r}
+# Quantile für y_hat_1
+quantile(y_hat_1, probs = c(0.025, 0.975))
+# Quantile für y_hat_2
+quantile(y_hat_2, probs = c(0.025, 0.975))
+```
+
+Da die Verteilung durch eine Simulation generiert wurde, kann das Quantil der Verteilung wie folgt interpretiert werden:
+*Wird die Vorhersage 100 mal wiederholt, so wird in 95% der Fälle der vorhergesagte Wert innerhalb des 95%-Quantils der Verteilung liegen.*
+
+Erinnern wir uns zurück an die Anfangs gestellte Hypothese - hat $x_1$ einen signifikanten Einfluss auf die unabhängige Variable - so kann diese anhand der resultierenden Verteilungen beantwortet werden. Wie gezeigt werden konnte, ändern sich die zu erwartenden Werte der abhängigen Variable, wenn sich $x_1$ ändert. Da die weiteren Kovariaten $x_2, x_3$ und $x_4$ konstant gehalten wurden, lässt sich die Änderung in der abhängigen Variable auf $x_1$ zurückführen. Wir würden also sagen, dass in mindestens 95% der Fälle eine Änderung in $x_1$ einen Einfluss auf die abhängige Variable hat.   
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+
+# Data from simulation
+df_plot <- data.frame(y_hat_1, y_hat_2)
+df_plot <- melt(df_plot)
+
+# Estimate densities
+y_hat_1_dens <- density(y_hat_1)
+y_hat_2_dens <- density(y_hat_2)
+
+# Get index of 2.5% & 9.75% percentile
+y_hat_1_min <- min(which(y_hat_1_dens$x >= quantile(y_hat_1, .025)))
+y_hat_1_max <- max(which(y_hat_1_dens$x <= quantile(y_hat_1, .975)))
+y_hat_2_min <- min(which(y_hat_2_dens$x >= quantile(y_hat_2, .025)))
+y_hat_2_max <- max(which(y_hat_2_dens$x <= quantile(y_hat_2, .975)))
+
+# Density value and value for percentile lines
+y_hat_1_x_low <- density(y_hat_1)$x[y_hat_2_min]
+y_hat_1_x_up <- density(y_hat_1)$x[y_hat_2_max]
+y_hat_2_x_low <- density(y_hat_2)$x[y_hat_2_min]
+y_hat_2_x_up <- density(y_hat_2)$x[y_hat_2_max]
+y_hat_1_y_low <- density(y_hat_1)$y[y_hat_2_min]
+y_hat_1_y_up <- density(y_hat_1)$y[y_hat_2_max]
+y_hat_2_y_low <- density(y_hat_2)$y[y_hat_2_min]
+y_hat_2_y_up <- density(y_hat_2)$y[y_hat_2_max]
+
+# Plot
+ggplot(df_plot, aes(x = value, fill = variable)) + geom_density(alpha = .5, color = "white") + 
+  scale_fill_manual(values = c("dodgerblue3", "firebrick3"), name = "Legende", labels = c("Szenario 1", "Szenario 2")) + 
+  theme_grey() + 
+  geom_linerange(aes(x = y_hat_1_x_low, ymin = 0, ymax = y_hat_1_y_low), linetype = "dashed", color = "white") + 
+  geom_linerange(aes(x = y_hat_1_x_up, ymin = 0, ymax = y_hat_1_y_up), linetype = "dashed", color = "white") + 
+  geom_linerange(aes(x = y_hat_2_x_low, ymin = 0, ymax = y_hat_2_y_low), linetype = "dashed", color = "white") + 
+  geom_linerange(aes(x = y_hat_2_x_up, ymin = 0, ymax = y_hat_2_y_up), linetype = "dashed", color = "white") + 
+  xlab("Wert") + 
+  ylab("Dichte") + 
+  ggtitle("Simulierte Verteilungen")
+```
